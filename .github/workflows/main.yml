@@ -28,6 +28,6 @@ jobs:
         with:
           bindings: geode-sdk/bindings
           combine: true
-          target: ${{ matrix.config.target }}
+          platform: ${{ matrix.config.target }}
           extra-args: ${{ matrix.config.extra-args }}
           sdk: nightly
