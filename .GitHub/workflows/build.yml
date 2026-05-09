@@ -1,0 +1,33 @@
+name: Build Geode Mod
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+        - name: Android64
+          os: ubuntu-latest
+          target: Android
+          extra-args: -DGEODE_TARGET_PLATFORM=android64
+
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+
+    steps:
+      - auto-checkout: true
+
+      - name: Build Mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          bindings: geode-sdk/bindings
+          combine: true
+          target: ${{ matrix.config.target }}
+          extra-args: ${{ matrix.config.extra-args }}
+          sdk: nightly
