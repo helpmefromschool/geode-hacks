@@ -3,9 +3,9 @@
     "gd": {
         "android": "2.206"
     },
-    "id": "com.helpmefromschool.geodehacks",
-    "name": "PC Hack Menu",
+    "id": "com.helpmefromschool.openhack_updated",
+    "name": "OpenHack PC",
     "version": "v1.0.0",
     "developer": "helpmefromschool",
-    "description": "A PC-style hack menu for Chromebooks."
+    "description": "Updated OpenHack for Geode v3 on ARM Chromebooks."
 }
