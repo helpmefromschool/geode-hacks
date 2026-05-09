@@ -1,0 +1,11 @@
+{
+    "geode": "3.0.0",
+    "gd": {
+        "android": "2.206"
+    },
+    "id": "com.helpmefromschool.geodehacks",
+    "name": "Mod meu for Android",
+    "version": "v1.0.0",
+    "developer": "helpmefromschol",
+    "description": "A PC-style multi-column hack menu for Chromebooks."
+}
