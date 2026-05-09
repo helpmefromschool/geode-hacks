@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.13)
 
-# This is the "GPS" for the builder
-set(GEODE_SDK $ENV{GEODE_SDK})
-list(APPEND CMAKE_PREFIX_PATH ${GEODE_SDK})
-
-project(GeodeHacks)
+project(OpenHack)
 
 find_package(Geode REQUIRED)
 
+# This tells Geode to use the newest "v3" system
 add_geode_mod(
     ${PROJECT_NAME}
-    SOURCES src/main.cpp
+    SOURCES src/main.cpp 
 )
