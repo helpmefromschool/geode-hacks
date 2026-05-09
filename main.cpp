@@ -6,7 +6,6 @@
 using namespace geode::prelude;
 
 // --- GLOBAL HACK SETTINGS ---
-// These are the "toggles" for your menu features
 bool g_noclip = false;
 bool g_instantRestart = false;
 bool g_showLayout = false;
@@ -25,7 +24,6 @@ class $modify(MyPlayLayer, PlayLayer) {
 
     void resetLevel() {
         PlayLayer::resetLevel();
-        // You can add logic for auto-checkpoints or restart here
     }
 };
 
@@ -47,11 +45,11 @@ public:
 
         auto winSize = CCDirector::get()->getWinSize();
 
-        // 1. Transparent Dark Overlay
+        // 1. Dark Overlay
         auto bg = CCLayerColor::create({ 0, 0, 0, 180 });
         this->addChild(bg);
 
-        // 2. Main Menu Container (Horizontal Rows)
+        // 2. Main Container (Row Layout)
         auto mainContainer = CCMenu::create();
         mainContainer->setLayout(
             RowLayout::create()
@@ -61,7 +59,7 @@ public:
         mainContainer->setContentSize({winSize.width - 60, winSize.height - 60});
         mainContainer->setPosition(winSize / 2);
 
-        // 3. Create Columns (Just like OpenHack/MegaHack)
+        // 3. Create Columns
         mainContainer->addChild(createColumn("PLAYER", {
             {"Noclip", &g_noclip},
             {"Instant Restart", &g_instantRestart}
@@ -73,7 +71,7 @@ public:
         }));
 
         mainContainer->addChild(createColumn("GLOBAL", {
-            {"Speedhack x2", nullptr} // Example for future speedhack buttons
+            {"Speedhack x2", nullptr}
         }));
 
         mainContainer->updateLayout();
@@ -82,18 +80,15 @@ public:
         return true;
     }
 
-    // Helper function to build vertical columns
     CCNode* createColumn(std::string title, std::vector<std::pair<std::string, bool*>> features) {
         auto col = CCMenu::create();
         col->setContentSize({140, 260});
         col->setLayout(ColumnLayout::create()->setGap(8.f)->setAxisAlignment(AxisAlignment::Start));
         
-        // Column Header
         auto label = CCLabelBMFont::create(title.c_str(), "goldFont.fnt");
         label->setScale(0.6f);
         col->addChild(label);
 
-        // Add Hack Buttons to the column
         for (auto& feat : features) {
             auto rowMenu = CCMenu::create();
             rowMenu->setLayout(RowLayout::create()->setGap(5.f)->setAxisAlignment(AxisAlignment::Start));
@@ -102,7 +97,6 @@ public:
             auto toggle = CCMenuItemToggler::createWithStandardSprites(
                 this, menu_selector(PCStyleHackMenu::onToggle), 0.5f
             );
-            toggle->setUserObject(CCBool::create(true)); // Placeholder logic
 
             auto featLabel = CCLabelBMFont::create(feat.first.c_str(), "bigFont.fnt");
             featLabel->setScale(0.4f);
@@ -118,7 +112,6 @@ public:
     }
 
     void onToggle(CCObject* sender) {
-        // Here you would link the button click to the bools above
         FLAlertLayer::create("Info", "Hack toggled!", "OK")->show();
     }
 
@@ -129,7 +122,7 @@ public:
         if (isVisible) {
             this->stopAllActions();
             this->setScale(0.85f);
-            this->runAction(CCEaseBackOut::create(CCScaleTo::create(0.2f, 1.0f))); // Smooth Animation
+            this->runAction(CCEaseBackOut::create(CCScaleTo::create(0.2f, 1.0f)));
         }
     }
 };
@@ -140,7 +133,6 @@ PCStyleHackMenu* g_menuInstance = nullptr;
 class $modify(MyCCLayer, CCLayer) {
     void onEnter() {
         CCLayer::onEnter();
-        // Ensures the menu is always ready in any scene
         if (!g_menuInstance) {
             g_menuInstance = PCStyleHackMenu::create();
             g_menuInstance->setVisible(false);
@@ -149,7 +141,7 @@ class $modify(MyCCLayer, CCLayer) {
     }
 
     void keyDown(enum p0) {
-        if (p0 == enum::KEY_Tab) { // TAB opens/closes the menu
+        if (p0 == enum::KEY_Tab) {
             if (g_menuInstance) g_menuInstance->toggle();
         }
         CCLayer::keyDown(p0);
