@@ -1,149 +1,562 @@
-#include <Geode/Geode.hpp>
-#include <Geode/modify/PlayLayer.hpp>
-#include <Geode/modify/CCLayer.hpp>
-#include <Geode/ui/Layout.hpp>
+#include "menu.hpp"
+#include "../openhack.hpp"
+#include "../config.hpp"
+#include "../hacks/hacks.hpp"
+// #include "blur.hpp"
 
-using namespace geode::prelude;
+#ifdef OPENHACK_STANDALONE
 
-// --- GLOBAL HACK SETTINGS ---
-bool g_noclip = false;
-bool g_instantRestart = false;
-bool g_showLayout = false;
-bool g_noDeathEffect = false;
-float g_speedhack = 1.0f;
+#include <imgui_markdown.h>
+#include "../../standalone/updater/updater.hpp"
 
-// --- HACK LOGIC (THE HOOKS) ---
-class $modify(MyPlayLayer, PlayLayer) {
-    void destroyPlayer(PlayerObject* p0, GameObject* p1) {
-        if (!g_noclip) PlayLayer::destroyPlayer(p0, p1);
-    }
-    
-    void update(float dt) {
-        PlayLayer::update(dt * g_speedhack);
-    }
+float *downloadProgress = nullptr;
 
-    void resetLevel() {
-        PlayLayer::resetLevel();
-    }
-};
+void markdownOpenLink(ImGui::MarkdownLinkCallbackData data) { openhack::utils::openURL(data.link); }
 
-// --- THE PC-STYLE MENU UI ---
-class PCStyleHackMenu : public CCLayer {
-public:
-    static PCStyleHackMenu* create() {
-        auto ret = new PCStyleHackMenu();
-        if (ret && ret->init()) {
-            ret->autorelease();
-            return ret;
-        }
-        CC_SAFE_DELETE(ret);
-        return nullptr;
-    }
+#endif
 
-    bool init() override {
-        if (!CCLayer::init()) return false;
+namespace openhack::menu {
+    bool isOpened = false;
+    bool isInitialized = false;
+    bool isAnimating = false;
+    std::vector<gui::Window> windows;
+    std::vector<gui::animation::MoveAction *> moveActions;
 
-        auto winSize = CCDirector::get()->getWinSize();
+    ImVec2 randomWindowPosition(gui::Window &window) {
+        // Calculate target position randomly to be outside the screen
+        auto screenSize = ImGui::GetIO().DisplaySize;
+        auto windowSize = window.getSize();
+        ImVec2 target;
 
-        // 1. Dark Overlay
-        auto bg = CCLayerColor::create({ 0, 0, 0, 180 });
-        this->addChild(bg);
-
-        // 2. Main Container (Row Layout)
-        auto mainContainer = CCMenu::create();
-        mainContainer->setLayout(
-            RowLayout::create()
-                ->setGap(15.f)
-                ->setAxisAlignment(AxisAlignment::Start)
-        );
-        mainContainer->setContentSize({winSize.width - 60, winSize.height - 60});
-        mainContainer->setPosition(winSize / 2);
-
-        // 3. Create Columns
-        mainContainer->addChild(createColumn("PLAYER", {
-            {"Noclip", &g_noclip},
-            {"Instant Restart", &g_instantRestart}
-        }));
-
-        mainContainer->addChild(createColumn("LEVEL", {
-            {"Show Layout", &g_showLayout},
-            {"No Death Effect", &g_noDeathEffect}
-        }));
-
-        mainContainer->addChild(createColumn("GLOBAL", {
-            {"Speedhack x2", nullptr}
-        }));
-
-        mainContainer->updateLayout();
-        this->addChild(mainContainer);
-
-        return true;
-    }
-
-    CCNode* createColumn(std::string title, std::vector<std::pair<std::string, bool*>> features) {
-        auto col = CCMenu::create();
-        col->setContentSize({140, 260});
-        col->setLayout(ColumnLayout::create()->setGap(8.f)->setAxisAlignment(AxisAlignment::Start));
-        
-        auto label = CCLabelBMFont::create(title.c_str(), "goldFont.fnt");
-        label->setScale(0.6f);
-        col->addChild(label);
-
-        for (auto& feat : features) {
-            auto rowMenu = CCMenu::create();
-            rowMenu->setLayout(RowLayout::create()->setGap(5.f)->setAxisAlignment(AxisAlignment::Start));
-            rowMenu->setContentSize({130, 25});
-
-            auto toggle = CCMenuItemToggler::createWithStandardSprites(
-                this, menu_selector(PCStyleHackMenu::onToggle), 0.5f
-            );
-
-            auto featLabel = CCLabelBMFont::create(feat.first.c_str(), "bigFont.fnt");
-            featLabel->setScale(0.4f);
-
-            rowMenu->addChild(toggle);
-            rowMenu->addChild(featLabel);
-            rowMenu->updateLayout();
-            col->addChild(rowMenu);
+        // Pick a random side of the screen
+        auto side = utils::random(3);
+        switch (side) {
+            case 0:
+                target = ImVec2(utils::random(screenSize.x - windowSize.x), -windowSize.y);
+                break;
+            case 1:
+                target = ImVec2(utils::random(screenSize.x - windowSize.x), screenSize.y);
+                break;
+            case 2:
+                target = ImVec2(-windowSize.x, utils::random(screenSize.y - windowSize.y));
+                break;
+            case 3:
+            default:
+                target = ImVec2(screenSize.x, utils::random(screenSize.y - windowSize.y));
+                break;
         }
 
-        col->updateLayout();
-        return col;
+        return target;
     }
 
-    void onToggle(CCObject* sender) {
-        FLAlertLayer::create("Info", "Hack toggled!", "OK")->show();
+    inline void updateCursorState() {
+        bool canShowInLevel = true;
+        if (auto *playLayer = PlayLayer::get()) {
+            canShowInLevel = playLayer->m_hasCompletedLevel ||
+                             playLayer->m_isPaused ||
+                             GameManager::get()->getGameVariable("0024");
+
+            // "Click Teleport" enables cursor, so we need to check if it's enabled
+            if (config::get<bool>("hack.click_tp.enabled", false)) return;
+        }
+        cocos2d::CCEGLView::sharedOpenGLView()->showCursor(isOpened || canShowInLevel);
     }
 
     void toggle() {
-        bool isVisible = !this->isVisible();
-        this->setVisible(isVisible);
-        
-        if (isVisible) {
-            this->stopAllActions();
-            this->setScale(0.85f);
-            this->runAction(CCEaseBackOut::create(CCScaleTo::create(0.2f, 1.0f)));
+        isOpened = !isOpened;
+
+        if (!isOpened) {
+            // Save window positions
+            config::set("windows", windows);
+            config::save();
+        }
+
+        // Create animation
+        double animationTime = config::get("menu.animationTime", 0.25);
+        auto easingType = config::get("menu.easingType", gui::animation::Easing::Quadratic);
+        auto easingMode = config::get("menu.easingMode", gui::animation::EasingMode::EaseInOut);
+        auto easing = gui::animation::getEasingFunction(easingType, easingMode);
+
+        if (isOpened) {
+            for (auto &window: windows) {
+                auto target = window.getPosition();
+                moveActions.push_back(window.createMoveAction(target, animationTime, easing));
+            }
+        } else {
+            for (auto &window: windows) {
+                auto target = randomWindowPosition(window);
+                moveActions.push_back(window.createMoveAction(target, animationTime, easing));
+            }
+        }
+
+        // Update cursor state
+        updateCursorState();
+
+        isAnimating = true;
+    }
+
+    bool isOpen() { return isOpened; }
+
+    void setVisibility(bool value) { isOpened = value; }
+
+    bool isVisible() {
+        // Whether the menu is visible or have running animations
+        return isOpened || !moveActions.empty();
+    }
+
+    void createOpenURLPopup(const std::string &url) {
+        gui::Modal::create("Open URL", [url](gui::Modal *popup) {
+            ImGui::TextWrapped("You are about to open\n%s in your browser.", url.c_str());
+            ImGui::TextWrapped("Do you want to continue?");
+            if (gui::button("Yes", {0.5f, 0.f})) {
+                utils::openURL(url.c_str());
+                popup->close();
+            }
+            ImGui::SameLine(0, 2);
+            if (gui::button("No")) {
+                popup->close();
+            }
+        });
+    }
+
+    void init() {
+        // Make sure to initialize ImGui
+        gui::init();
+
+        // Then initialize the windows
+        if (isInitialized)
+            return;
+
+        addWindow("OpenHack", []() {
+            gui::text("Version: " OPENHACK_VERSION);
+            gui::text("Build: " __DATE__ " " __TIME__);
+            gui::text("Game version: %s", utils::getGameVersion().c_str());
+
+#ifdef OPENHACK_STANDALONE
+            gui::checkbox("Check for updates", "menu.checkForUpdates");
+#endif
+
+            if (gui::button("GitHub", ImVec2(0.5, 0)))
+                createOpenURLPopup(OPENHACK_HOME_URL);
+
+            ImGui::SameLine(0, 2);
+
+            if (gui::button("Discord"))
+                createOpenURLPopup("https://discord.gg/QSd4jUyc45");
+
+            auto searchValue = config::getGlobal<std::string>("searchValue", "");
+            gui::widthF(1.0);
+            gui::inputText("##Search", &searchValue, 64, "Search");
+            gui::width();
+            config::setGlobal("searchValue", searchValue);
+        });
+
+        addWindow("Interface", []() {
+            gui::width(120);
+            if (gui::combo("Theme", "menu.theme", gui::THEME_NAMES, gui::THEME_COUNT)) {
+                gui::setTheme(config::get<gui::Themes>("menu.theme"));
+                gui::loadPalette();
+            }
+            gui::width();
+
+            gui::popupSettings("Sizes", []() {
+                gui::width(70);
+                gui::inputFloat("UI Scale", "menu.uiScale", 0.5f, 3.0f, "%.3f");
+                gui::inputFloat("Border Size", "menu.borderSize", 0.0f, 10.0f, "%.3f");
+                gui::inputFloat("Window Rounding", "menu.windowRounding", 0.0f, 10.0f, "%.3f");
+                gui::inputFloat("Frame Rounding", "menu.frameRounding", 0.0f, 10.0f, "%.3f");
+                gui::inputFloat("Window Margin", "menu.windowSnap", 0.0f, 10.0f, "%.3f");
+                gui::width();
+            });
+
+            gui::popupSettings("Fonts", []() {
+                gui::width(120);
+                auto fonts = gui::getFonts();
+                std::string fontsLine; // Create null-delimited string with all font names
+                for (auto &font: fonts)
+                    fontsLine += font.name + '\0';
+                fontsLine += '\0';
+                int32_t currentFont = gui::getFontIndex();
+                if (gui::combo("Font", &currentFont, fontsLine.c_str())) {
+                    auto selected = fonts[currentFont].name;
+                    gui::setFont(selected);
+                }
+                gui::inputFloat("Font Size", "menu.fontSize", 8.0f, 32.0f, "%.1f px");
+                gui::width();
+
+                if (gui::button("Reload Fonts")) {
+                    config::setGlobal("resetNextFrame", true);
+                    return;
+                }
+                gui::tooltip("Reloads the UI to apply changes which require a restart");
+            });
+
+            gui::popupSettings("Colors", []() {
+                gui::width(120);
+                gui::colorEdit("Background", "menu.color.background");
+                gui::colorEdit("Accent", "menu.color.accent");
+                gui::colorEdit("Primary", "menu.color.primary");
+                gui::colorEdit("Secondary", "menu.color.secondary");
+                gui::colorEdit("Border", "menu.color.border");
+                gui::colorEdit("Hovered", "menu.color.hovered");
+                gui::colorEdit("Clicked", "menu.color.clicked");
+                gui::colorEdit("Text", "menu.color.text");
+                gui::colorEdit("Text Disabled", "menu.color.textDisabled");
+                gui::width();
+
+                if (gui::button("Reset")) {
+                    gui::loadPalette();
+                }
+            });
+
+            gui::popupSettings("Animations", []() {
+                gui::width(70);
+                gui::inputFloat("Animation Time", "menu.animationTime", 0.0f, 10.0f, "%.3f");
+                gui::width();
+                gui::width(110);
+                gui::combo("Easing Type", "menu.easingType",
+                           gui::animation::EASING_NAMES.data(),
+                           gui::animation::EASING_NAMES.size());
+                gui::combo("Easing Mode", "menu.easingMode",
+                           gui::animation::EASING_MODE_NAMES.data(),
+                            gui::animation::EASING_MODE_NAMES.size());
+                gui::width();
+                gui::checkbox("Animate Opacity", "menu.animateOpacity");
+            });
+
+            // TODO: Implement blur properly
+            // if (gui::combo("Blur", "menu.blur", "Off\0Windows\0Screen\0\0")) {
+            //     blur::setState(config::get<blur::State>("menu.blur"));
+            // }
+
+
+            gui::callback([]() {
+                gui::tooltip("Makes the title bar change colors.");
+            });
+            gui::toggleSetting(
+                    "Rainbow Menu",
+                    "menu.rainbow.enabled",
+                    []() {
+                        gui::width(110);
+                        gui::inputFloat("Speed", "menu.rainbow.speed");
+                        gui::inputFloat("Saturation", "menu.rainbow.saturation", 0.0f, 100.0f);
+                        gui::inputFloat("Value", "menu.rainbow.value", 0.0f, 100.0f);
+                        gui::width();
+                    });
+
+            if (gui::button("Reorder Windows"))
+                stackWindows();
+            gui::tooltip("Reorganizes the windows to take as little space as possible");
+
+            gui::checkbox("Lock First Column", "menu.lockFirstColumn");
+            gui::tooltip("Makes OpenHack specific windows stay in the first column");
+
+            gui::checkbox("Lock Windows", "menu.stackWindows");
+            gui::tooltip("Realign all windows automatically");
+
+        });
+
+        // Get windows for hacks
+        auto hacks = hacks::getWindows();
+        for (auto &hack: hacks) {
+            windows.push_back(hack);
+        }
+
+        // Call late init for embedded hacks
+        for (auto &hack: hacks::getEmbeddedHacks()) {
+            hack->onLateInit();
+        }
+
+        // Restore window positions from config
+        if (config::has("windows")) {
+            auto loaded = config::get<std::vector<gui::Window>>("windows");
+            for (auto &window: windows) {
+                auto it = std::find_if(loaded.begin(), loaded.end(),
+                                       [&window](const gui::Window &w) { return w.getTitle() == window.getTitle(); });
+                if (it != loaded.end()) {
+                    auto opened = it->isOpen();
+                    auto position = it->getPosition();
+                    window.setOpen(opened);
+                    window.setPosition(position);
+                    window.setDrawPosition(position);
+                }
+            }
+        }
+
+        // Sort windows by title
+        std::sort(windows.begin(), windows.end(), [](const gui::Window &a, const gui::Window &b) {
+            return a.getTitle() < b.getTitle();
+        });
+
+        isInitialized = true;
+    }
+
+    uint8_t firstRunState = 0;
+
+    void updateColors() {
+        // Rainbow menu
+        bool rainbowEnabled = config::get<bool>("menu.rainbow.enabled");
+        gui::Color accentOrig;
+        if (rainbowEnabled) {
+            accentOrig = config::get<gui::Color>("menu.color.accent");
+
+            // Calculate new colors
+            auto speed = config::get<float>("menu.rainbow.speed");
+            auto saturation = config::get<float>("menu.rainbow.saturation");
+            auto value = config::get<float>("menu.rainbow.value");
+
+            float r, g, b;
+            ImGui::ColorConvertHSVtoRGB(
+                    (float) ImGui::GetTime() * speed,
+                    saturation / 100.0f,
+                    value / 100.0f,
+                    r, g, b);
+
+            gui::Color primary = {r, g, b, accentOrig.a};
+            config::set("menu.color.accent", primary);
+        }
+
+        // Update theme
+        gui::setStyles();
+
+        // Revert rainbow menu colors
+        if (rainbowEnabled) {
+            config::set("menu.color.accent", accentOrig);
         }
     }
-};
 
-// --- THE TAB KEY CONTROLLER ---
-PCStyleHackMenu* g_menuInstance = nullptr;
+    void draw() {
+        // Calculate relative UI scale against 1080p
+        auto resW = ImGui::GetIO().DisplaySize.x;
+        auto ratio = resW / 1920.0f;
+        auto currentScale = config::get<float>("menu.uiScale");
+        config::setGlobal("UIScale", ratio * currentScale);
 
-class $modify(MyCCLayer, CCLayer) {
-    void onEnter() {
-        CCLayer::onEnter();
-        if (!g_menuInstance) {
-            g_menuInstance = PCStyleHackMenu::create();
-            g_menuInstance->setVisible(false);
-            CCScene::get()->addChild(g_menuInstance, 100000);
+        // Get the window sizes for the first run
+        switch (firstRunState) {
+            case 0:
+                gui::setStyles();
+                ImGui::GetStyle().Alpha = 0.0f;
+                for (auto &window: windows) {
+                    window.draw();
+                }
+                firstRunState = 1;
+                break;
+            case 1:
+                // Make all windows start outside the screen
+                for (auto &window: windows) {
+                    // Render the window once to get the size
+                    window.draw();
+                    auto target = randomWindowPosition(window);
+                    window.setDrawPosition(target);
+                }
+                ImGui::GetStyle().Alpha = 1.0f;
+                firstRunState = 2;
+                return;
+            default:
+                break;
+        }
+
+
+#ifdef OPENHACK_STANDALONE
+        // Check for updates
+        if (config::getGlobal<bool>("update.available", false)) {
+            gui::Modal::create("Update Available", [](gui::Modal* modal){
+                gui::text("A new version of OpenHack is available!");
+                gui::text("Current version: " OPENHACK_VERSION);
+                gui::text("Latest version: %s", config::getGlobal<std::string>("update.version").c_str());
+
+                std::string content = "# " + config::getGlobal<std::string>("update.title") + "\n" +
+                                      config::getGlobal<std::string>("update.changelog");
+
+                ImGui::MarkdownConfig mdConfig;
+                mdConfig.linkCallback = markdownOpenLink;
+                mdConfig.tooltipCallback = nullptr;
+                mdConfig.imageCallback = nullptr;
+                mdConfig.userData = nullptr;
+                auto font = gui::getFont();
+                mdConfig.headingFormats[0] = {font.title, true};
+                mdConfig.headingFormats[1] = {font.title, false};
+                mdConfig.headingFormats[2] = {font.normal, false};
+
+                ImGui::Markdown(content.c_str(), content.length(), mdConfig);
+
+                if (downloadProgress) {
+                    if (*downloadProgress == 1.0f)
+                        gui::text("Installing update...");
+                    else
+                        gui::progressBar(*downloadProgress);
+                } else {
+                    if (gui::button("Download", ImVec2(0.5, 0))) {
+                        downloadProgress = new float(0.0f);
+                        updater::install(config::getGlobal<std::string>("update.downloadUrl"), downloadProgress);
+                    }
+                    ImGui::SameLine(0, 0);
+                    if (gui::button("Close")) {
+                        modal->close();
+                    }
+                }
+            });
+            config::setGlobal("update.available", false);
+        }
+#endif
+
+        utils::resetKeyStates();
+
+        if (utils::isKeyPressed(config::get<std::string>("menu.toggleKey", "Tab")))
+            toggle();
+
+        keybinds::update();
+
+        // Run move actions
+        for (auto &action: moveActions) {
+            action->update(utils::getDeltaTime());
+        }
+
+        // Change opacity of the menu to the latest action progress
+        if (isAnimating && !moveActions.empty() &&
+            config::get<float>("menu.animationTime") > 0 &&
+            config::get<bool>("menu.animateOpacity", false)) {
+            auto lastAction = moveActions.back();
+            auto progress = std::clamp(lastAction->getProgress(), 0.0, 1.0);
+            if (!isOpened) progress = 1.0 - progress;
+            ImGui::GetStyle().Alpha = static_cast<float>(progress);
+        }
+
+        // Update embedded hacks
+        for (auto &hack: hacks::getEmbeddedHacks()) {
+            hack->update();
+        }
+
+        // Remove finished actions
+        moveActions.erase(
+                std::remove_if(
+                        moveActions.begin(), moveActions.end(),
+                        [](gui::animation::MoveAction *action) {
+                            if (action->isFinished()) {
+                                delete action;
+                                return true;
+                            }
+                            return false;
+                        }),
+                moveActions.end());
+
+        // Reset animation flag if there are no more actions
+        if (moveActions.empty()) {
+            isAnimating = false;
+        }
+
+        if (!isVisible()) {
+            if (!gui::getPopups().empty()) {
+                updateColors();
+                gui::drawPopups();
+            }
+            return;
+        }
+
+        // Show mouse cursor if the menu is open
+        updateCursorState();
+
+        // Update colors
+        updateColors();
+
+        // Draw all windows
+        for (auto &window: windows) {
+            window.draw();
+        }
+
+        gui::drawPopups();
+
+        // Auto reset window positions
+        auto isDragging = config::getGlobal("draggingWindow", false);
+        auto stackEnabled = config::get<bool>("menu.stackWindows");
+        if (moveActions.empty() && !isDragging && stackEnabled)
+            stackWindows();
+
+        // Reset dragging state
+        config::setGlobal("draggingWindow", false);
+
+        // Reset UI if requested
+        if (config::getGlobal<bool>("resetNextFrame", false)) {
+            config::setGlobal("resetNextFrame", false);
+            utils::resetUI();
         }
     }
 
-    void keyDown(enum p0) {
-        if (p0 == enum::KEY_Tab) {
-            if (g_menuInstance) g_menuInstance->toggle();
-        }
-        CCLayer::keyDown(p0);
+    void addWindow(std::string_view title, const std::function<void()> &onDraw) {
+        windows.emplace_back(title, onDraw);
     }
-};
+
+    std::map<gui::Window *, ImVec2> getStackedPositions() {
+        auto firstColumnLock = config::get<bool>("menu.lockFirstColumn");
+        static std::array<std::string, 3> s_builtInWindows = {"OpenHack", "Interface", "Keybinds"};
+        std::array<std::string, 3> builtInWindows = s_builtInWindows;
+        if (!firstColumnLock) {
+            builtInWindows = {};
+        }
+
+        auto snap = config::get<float>("menu.windowSnap");
+        ImVec2 screenSize = ImGui::GetIO().DisplaySize;
+
+        const auto scale = config::getGlobal<float>("UIScale");
+        float windowWidth = gui::Window::MIN_SIZE.x * scale;
+        auto columns = (int) ((screenSize.x - snap) / (windowWidth + snap));
+
+        std::map<gui::Window *, ImVec2> positions;
+
+        // Built-ins go into first column
+        float x = snap;
+        float y = snap;
+        for (auto &title: builtInWindows) {
+            auto it = std::find_if(windows.begin(), windows.end(),
+                                   [&title](const gui::Window &window) { return window.getTitle() == title; });
+            if (it != windows.end()) {
+                positions[&(*it)] = ImVec2(x, y);
+                y += it->getSize().y + snap;
+            }
+        }
+
+        if (columns <= 0)
+            return positions;
+
+        // Rest are stacked to take as little space as possible
+        auto columnCount = firstColumnLock ? columns - 1 : columns;
+        std::vector<float> heights(columnCount, snap);
+        for (auto &window: windows) {
+            // Skip built-in windows
+            if (std::find(builtInWindows.begin(), builtInWindows.end(), window.getTitle()) != builtInWindows.end())
+                continue;
+
+            // Find the column with the smallest height
+            auto min = std::min_element(heights.begin(), heights.end());
+            auto index = std::distance(heights.begin(), min);
+
+            // Set the position
+            auto windowColumn = firstColumnLock ? index + 1 : index;
+            positions[&window] = ImVec2((float) windowColumn * (windowWidth + snap) + snap, *min);
+            *min += window.getSize().y + snap;
+
+            // Update the height
+            heights[index] = *min;
+        }
+
+        return positions;
+    }
+
+    void stackWindows() {
+        auto animationTime = config::get<float>("menu.animationTime");
+        auto easingType = config::get<gui::animation::Easing>("menu.easingType");
+        auto easingMode = config::get<gui::animation::EasingMode>("menu.easingMode");
+        auto easing = gui::animation::getEasingFunction(easingType, easingMode);
+
+        auto positions = getStackedPositions();
+        for (auto &pair: positions) {
+            // Check if the window is already in the correct position
+            if (pair.first->getPosition().x == pair.second.x && pair.first->getPosition().y == pair.second.y)
+                continue;
+
+            auto *action = pair.first->createMoveAction(pair.second, animationTime, easing, true);
+            moveActions.push_back(action);
+        }
+    }
+}
