@@ -27,4 +27,4 @@ jobs:
         with:
           sdk: nightly
           combine: true
-          target: ${{ matrix.config.target }}
+          platform: ${{ matrix.config.target }}  # Use 'platform' instead of 'target' here
