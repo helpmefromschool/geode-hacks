@@ -15,7 +15,6 @@ jobs:
         - name: Android64
           os: ubuntu-latest
           target: Android
-          extra-args: -DGEODE_TARGET_PLATFORM=android64
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
@@ -23,11 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-           - name: Build Mod
+      - name: Build Mod
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: nightly
-          bindings: geode-sdk/bindings
           combine: true
           target: ${{ matrix.config.target }}
-
